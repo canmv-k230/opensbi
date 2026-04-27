@@ -146,20 +146,37 @@ static bool is_region_valid(const struct sbi_domain_memregion *reg)
 	if (reg->order < 3 || __riscv_xlen < reg->order)
 		return FALSE;
 
+	if (reg->order == __riscv_xlen)
+		return (reg->base == 0) ? TRUE : FALSE;
+
 	if (reg->base & (BIT(reg->order) - 1))
 		return FALSE;
 
 	return TRUE;
 }
 
+static unsigned long region_start(const struct sbi_domain_memregion *reg)
+{
+	return reg->base;
+}
+
+static unsigned long region_end(const struct sbi_domain_memregion *reg)
+{
+	if (reg->order < __riscv_xlen)
+		return reg->base + (BIT(reg->order) - 1);
+
+	// sbi_printf("%s: Invalid region order %lu\n", __func__, reg->order);
+	return -1UL;
+}
+
 /** Check if regionA is sub-region of regionB */
 static bool is_region_subset(const struct sbi_domain_memregion *regA,
 			     const struct sbi_domain_memregion *regB)
 {
-	ulong regA_start = regA->base;
-	ulong regA_end = regA->base + (BIT(regA->order) - 1);
-	ulong regB_start = regB->base;
-	ulong regB_end = regB->base + (BIT(regA->order) - 1);
+	ulong regA_start = region_start(regA);
+	ulong regA_end = region_end(regA);
+	ulong regB_start = region_start(regB);
+	ulong regB_end = region_end(regB);
 
 	if ((regB_start <= regA_start) &&
 	    (regA_start < regB_end) &&
@@ -181,6 +198,12 @@ static bool is_region_conflict(const struct sbi_domain_memregion *regA,
 	return FALSE;
 }
 
+static bool is_region_same_range(const struct sbi_domain_memregion *regA,
+				 const struct sbi_domain_memregion *regB)
+{
+	return (regA->base == regB->base) && (regA->order == regB->order);
+}
+
 /** Check if regionA should be placed before regionB */
 static bool is_region_before(const struct sbi_domain_memregion *regA,
 			     const struct sbi_domain_memregion *regB)
@@ -193,6 +216,21 @@ static bool is_region_before(const struct sbi_domain_memregion *regA,
 		return TRUE;
 
 	return FALSE;
+}
+
+static bool is_region_mergeable(const struct sbi_domain_memregion *regA,
+				const struct sbi_domain_memregion *regB)
+{
+	if (__riscv_xlen <= regA->order)
+		return FALSE;
+
+	if (regA->order != regB->order || regA->flags != regB->flags)
+		return FALSE;
+
+	if ((regA->base + BIT(regA->order)) != regB->base)
+		return FALSE;
+
+	return ((regA->base & (BIT(regA->order + 1) - 1)) == 0);
 }
 
 static int sanitize_domain(const struct sbi_platform *plat,
@@ -472,26 +510,48 @@ int sbi_domain_root_add_memregion(const struct sbi_domain_memregion *reg)
 {
 	int rc;
 	bool reg_merged;
-	struct sbi_domain_memregion *nreg, *nreg1, *nreg2;
+	struct sbi_domain_memregion *nreg, *nreg1, *nreg2, *match_reg;
 	const struct sbi_platform *plat = sbi_platform_thishart_ptr();
 
 	/* Sanity checks */
 	if (!reg || domain_finalized ||
 	    (root.regions != root_memregs) ||
-	    (ROOT_REGION_MAX <= root_memregs_count))
-		return SBI_EINVAL;
-
-	/* Check for conflicts */
-	sbi_domain_for_each_memregion(&root, nreg) {
-		if (is_region_conflict(reg, nreg))
+	    (ROOT_REGION_MAX <= root_memregs_count)) {
+			sbi_printf("%s: invalid root domain state\n", __func__);
 			return SBI_EINVAL;
+		}
+
+	match_reg = NULL;
+
+	/* Check for conflicts and locate a same-range root region to update */
+	sbi_domain_for_each_memregion(&root, nreg) {
+		if (is_region_same_range(reg, nreg)) {
+			match_reg = nreg;
+			continue;
+		}
+
+		if (is_region_conflict(reg, nreg)) {
+			sbi_printf("%s: conflict between new region "
+				   "(base=0x%lx order=%lu flags=0x%lx) and "
+				   "root region (base=0x%lx order=%lu flags=0x%lx)\n",
+				   __func__, reg->base, reg->order, reg->flags,
+				   nreg->base, nreg->order, nreg->flags);
+			return SBI_EINVAL;
+		}
 	}
 
-	/* Append the memregion to root memregions */
-	nreg = &root_memregs[root_memregs_count];
-	sbi_memcpy(nreg, reg, sizeof(*reg));
-	root_memregs_count++;
-	root_memregs[root_memregs_count].order = 0;
+	if (match_reg) {
+		// sbi_printf("%s: override root region base=0x%lx order=%lu flags=0x%lx -> 0x%lx\n",
+		// 	   __func__, reg->base, reg->order, match_reg->flags,
+		// 	   reg->flags);
+		sbi_memcpy(match_reg, reg, sizeof(*reg));
+	} else {
+		/* Append the memregion to root memregions */
+		nreg = &root_memregs[root_memregs_count];
+		sbi_memcpy(nreg, reg, sizeof(*reg));
+		root_memregs_count++;
+		root_memregs[root_memregs_count].order = 0;
+	}
 
 	/* Sort and optimize root regions */
 	do {
@@ -511,9 +571,7 @@ int sbi_domain_root_add_memregion(const struct sbi_domain_memregion *reg)
 			if (!nreg1->order)
 				continue;
 
-			if ((nreg->base + BIT(nreg->order)) == nreg1->base &&
-			    nreg->order == nreg1->order &&
-			    nreg->flags == nreg1->flags) {
+			if (is_region_mergeable(nreg, nreg1)) {
 				nreg->order++;
 				while (nreg1->order) {
 					nreg2 = nreg1 + 1;

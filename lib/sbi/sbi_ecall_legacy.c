@@ -110,10 +110,6 @@ static int sbi_ecall_legacy_handler(unsigned long extid, unsigned long funcid,
 		sbi_system_reset(SBI_SRST_RESET_TYPE_SHUTDOWN,
 				 SBI_SRST_RESET_REASON_NONE);
 		break;
-	case SBI_EXT_0_1_PMP_WRITE_ENABLE:
-		// handler
-		sbi_write_enable(regs->a0);
-		break;
 	default:
 		ret = SBI_ENOTSUPP;
 	};
@@ -123,6 +119,6 @@ static int sbi_ecall_legacy_handler(unsigned long extid, unsigned long funcid,
 
 struct sbi_ecall_extension ecall_legacy = {
 	.extid_start = SBI_EXT_0_1_SET_TIMER,
-	.extid_end = SBI_EXT_0_1_PMP_WRITE_ENABLE,
+	.extid_end = SBI_EXT_0_1_SHUTDOWN,
 	.handle = sbi_ecall_legacy_handler,
 };

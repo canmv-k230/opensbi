@@ -177,6 +177,27 @@ unsigned int sbi_hart_pmp_addrbits(struct sbi_scratch *scratch)
 	return hfeatures->pmp_addr_bits;
 }
 
+static bool hart_pmp_region_exists(unsigned int limit,
+				   unsigned long addr,
+				   unsigned long order)
+{
+	unsigned int idx;
+	unsigned long prot;
+	unsigned long entry_addr;
+	unsigned long entry_order;
+
+	for (idx = 0; idx < limit; idx++) {
+		if (pmp_get(idx, &prot, &entry_addr, &entry_order))
+			continue;
+		if ((prot & PMP_A) == 0)
+			continue;
+		if (entry_addr == addr && entry_order == order)
+			return true;
+	}
+
+	return false;
+}
+
 int sbi_hart_pmp_configure(struct sbi_scratch *scratch)
 {
 	struct sbi_domain_memregion *reg;
@@ -184,6 +205,7 @@ int sbi_hart_pmp_configure(struct sbi_scratch *scratch)
 	unsigned int pmp_idx = 2, pmp_flags, pmp_bits, pmp_gran_log2;
 	unsigned int pmp_count = sbi_hart_pmp_count(scratch);
 	unsigned long pmp_addr = 0, pmp_addr_max = 0;
+	int rc;
 
 	if (!pmp_count)
 		return 0;
@@ -194,9 +216,6 @@ int sbi_hart_pmp_configure(struct sbi_scratch *scratch)
 	pmp_addr_max = 0x3fffffffff;
 
 	sbi_domain_for_each_memregion(dom, reg) {
-		if (pmp_count <= pmp_idx)
-			break;
-
 		pmp_flags = 0;
 		if (reg->flags & SBI_DOMAIN_MEMREGION_READABLE)
 			pmp_flags |= PMP_R;
@@ -208,37 +227,27 @@ int sbi_hart_pmp_configure(struct sbi_scratch *scratch)
 			pmp_flags |= PMP_L;
 
 		pmp_addr =  reg->base >> PMP_SHIFT;
-		if (pmp_gran_log2 <= reg->order && pmp_addr < pmp_addr_max)
-			pmp_set(pmp_idx++, pmp_flags, reg->base, reg->order);
-		else {
+		if (hart_pmp_region_exists(pmp_idx, reg->base, reg->order))
+			continue;
+
+		if (pmp_gran_log2 > reg->order || pmp_addr >= pmp_addr_max) {
 			sbi_printf("Can not configure pmp for domain %s", dom->name);
 			sbi_printf("because memory region address %lx or size %lx is not in range\n",
 				    reg->base, reg->order);
+			continue;
 		}
-	}
 
-	return 0;
-}
+		if (pmp_count <= pmp_idx) {
+			sbi_printf("Can not configure pmp for domain %s", dom->name);
+			sbi_printf("because no free PMP entry is available for address %lx size-order %lx\n",
+				    reg->base, reg->order);
+			return SBI_ENOSPC;
+		}
 
-int sbi_write_enable(int write_enable)
-{
-	ulong prot;
-	ulong addr;
-	ulong log2size;
-
-	if(write_enable)
-	{
-		prot	  = PMP_R | PMP_W;
-		addr	  = 0x91213000;
-		log2size = log2roundup(0x1000);
+		rc = pmp_set(pmp_idx++, pmp_flags, reg->base, reg->order);
+		if (rc)
+			return rc;
 	}
-	else
-	{
-		prot	  = PMP_R;
-		addr	  = 0x91213000;
-		log2size = log2roundup(0x1000);
-	}
-	pmp_set(1, prot, addr, log2size);
 
 	return 0;
 }

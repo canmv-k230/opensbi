@@ -316,14 +316,13 @@ static void __noreturn init_coldboot(struct sbi_scratch *scratch, u32 hartid)
 	sbi_boot_print_domains(scratch);
 #endif
 
-#ifdef K230_LITTLE_CORE
 	 rc = sbi_hart_pmp_configure(scratch);
 	 if (rc) {
 	 	sbi_printf("%s: PMP configure failed (error %d)\n",
 	 		   __func__, rc);
 	 	sbi_hart_hang();
 	 }
-#endif
+
 	/*
 	 * Note: Platform final initialization should be last so that
 	 * it sees correct domain assignment and PMP configuration.

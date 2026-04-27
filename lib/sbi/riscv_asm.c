@@ -235,6 +235,9 @@ int pmp_set(unsigned int n, unsigned long prot, unsigned long addr,
 	csr_write_num(pmpaddr_csr, pmpaddr);
 	csr_write_num(pmpcfg_csr, pmpcfg);
 
+	asm volatile ("sfence.vma zero, zero");
+	asm volatile ("fence.i");
+
 	return 0;
 }
 
