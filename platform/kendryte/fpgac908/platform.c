@@ -15,8 +15,6 @@
 #include <sbi/sbi_math.h>
 #include <sbi/sbi_trap.h>
 #include <sbi/sbi_unpriv.h>
-#include <sbi_utils/fdt/fdt_helper.h>
-#include <sbi_utils/fdt/fdt_fixup.h>
 #include <sbi_utils/irqchip/plic.h>
 #include <sbi_utils/serial/uart8250.h>
 #include <sbi_utils/sys/clint.h>
@@ -39,12 +37,6 @@ struct k230_atag_header {
 
 static size_t plic_base_addr;
 static size_t clint_base_addr;
-
-static struct platform_uart_data uart = {
-	UART_ADDR,
-	UART_CLK,
-	UART_DEFAULT_BAUDRATE,
-};
 
 static struct plic_data plic = {
 	.addr = 0xF00000000,
@@ -391,45 +383,22 @@ static int c908_vendor_ext_provider(long extid, long funcid,
 
 static int c908_early_init(bool cold_boot)
 {
-	void *fdt;
-	struct platform_uart_data uart_data;
-	struct plic_data plic_data;
-	unsigned long clint_addr;
-	int rc;
-
 	if (!cold_boot)
 		return 0;
 
 	plic_base_addr = csr_read(CSR_PLIC_BASE);
 	clint_base_addr = plic_base_addr + C908_PLIC_CLINT_OFFSET;
-
-	fdt = sbi_scratch_thishart_arg1_ptr();
-
-	rc = fdt_parse_uart8250(fdt, &uart_data, "snps,dw-apb-uart");
-	if (!rc)
-		uart = uart_data;
-
-	rc = fdt_parse_plic(fdt, &plic_data, "riscv,plic0");
-	if (!rc)
-		plic = plic_data;
-
-	rc = fdt_parse_compat_addr(fdt, &clint_addr, "riscv,clint0");
-	if (!rc)
-		clint.addr = clint_addr;
-
+	plic.addr = plic_base_addr;
+	clint.addr = clint_base_addr;
 	return 0;
 }
 
 static int c908_final_init(bool cold_boot)
 {
-	// void *fdt;
 	unsigned long exceptions;
 
 	if (!cold_boot)
 		return 0;
-
-	// fdt = sbi_scratch_thishart_arg1_ptr();
-	// fdt_fixups(fdt);
 
 	/* Delegate 0 ~ 7 exceptions to S-mode */
 	exceptions = csr_read(CSR_MEDELEG);
